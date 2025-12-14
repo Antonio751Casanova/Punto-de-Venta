@@ -42,11 +42,22 @@ public class MenuPrincipal extends JFrame {
         mainPanel.setBackground(Color.WHITE);
 
         // Encabezado
+        JPanel headerPanel = new JPanel(new BorderLayout());
+        headerPanel.setOpaque(false);
+        headerPanel.setBorder(new EmptyBorder(20, 10, 10, 10));
+
         JLabel titleLabel = new JLabel("Sistema de Punto de Venta", SwingConstants.CENTER);
         titleLabel.setFont(fuenteTitulo);
         titleLabel.setForeground(azulPrincipal);
-        titleLabel.setBorder(new EmptyBorder(30, 10, 20, 10));
-        mainPanel.add(titleLabel, BorderLayout.NORTH);
+
+        JLabel subtitle = new JLabel("Inventario respaldado en MySQL (configurable por entorno)", SwingConstants.CENTER);
+        subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+        subtitle.setForeground(new Color(90, 90, 90));
+        subtitle.setBorder(new EmptyBorder(5, 0, 15, 0));
+
+        headerPanel.add(titleLabel, BorderLayout.CENTER);
+        headerPanel.add(subtitle, BorderLayout.SOUTH);
+        mainPanel.add(headerPanel, BorderLayout.NORTH);
 
         // Panel de botones
         JPanel buttonPanel = new JPanel();
