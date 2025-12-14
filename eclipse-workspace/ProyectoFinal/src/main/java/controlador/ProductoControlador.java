@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Date;
+import java.util.List;
 
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
@@ -38,41 +39,16 @@ import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
+import modelo.Producto;
 
 
 public class ProductoControlador {
 	 private static boolean isWatching = false;
+	 private static DefaultTableModel ultimoModelo;
 
 	 public static void iniciarObservadorExcel(DefaultTableModel modeloTabla) {
-	        if (isWatching)
-			 {
-				return; // Evitar múltiples instancias
-			}
-
-	        new Thread(() -> {
-	            try {
-	                Path path = Paths.get("data/productos.xlsx");
-	                WatchService watchService = FileSystems.getDefault().newWatchService();
-	                path.getParent().register(watchService, StandardWatchEventKinds.ENTRY_MODIFY);
-
-	                isWatching = true;
-	                while (isWatching) {
-	                    WatchKey key = watchService.take();
-	                    for (WatchEvent<?> event : key.pollEvents()) {
-	                        if (event.context().toString().equals("productos.xlsx")) {
-	                            // Esperar 1 segundo para evitar múltiples eventos
-	                            Thread.sleep(1000);
-	                            // Recargar datos en la tabla
-	                            cargarDatosExcel(modeloTabla);
-	                            break;
-	                        }
-	                    }
-	                    key.reset();
-	                }
-	            } catch (Exception e) {
-	                e.printStackTrace();
-	            }
-	        }).start();
+		 	ultimoModelo = modeloTabla;
+	        isWatching = false; // Persistencia en MySQL, no se requiere observador de archivos
 	    }
 
 	    // Detener el observador (opcional)
@@ -82,83 +58,34 @@ public class ProductoControlador {
 
 
 	    public static void cargarDatosExcel(DefaultTableModel modeloTabla) {
-	        File file = new File("data/productos.xlsx");
-
-	        // Verificación robusta del archivo
-	        if (!file.exists()) {
-	            JOptionPane.showMessageDialog(null,
-	                "El archivo productos.xlsx no existe en la carpeta data/",
-	                "Error",
-	                JOptionPane.ERROR_MESSAGE);
-	            return;
-	        }
-
-	        if (file.length() == 0) {
-	            JOptionPane.showMessageDialog(null,
-	                "El archivo Excel está vacío",
-	                "Error",
-	                JOptionPane.WARNING_MESSAGE);
-	            return;
-	        }
-
+	        ultimoModelo = modeloTabla;
 	        new SwingWorker<Void, Void>() {
 	            @Override
-	            protected Void doInBackground() throws Exception {
-	                try (FileInputStream fis = new FileInputStream(file);
-	                     Workbook workbook = WorkbookFactory.create(fis)) {
-
-	                    Sheet sheet = workbook.getSheetAt(0);
-	                    SwingUtilities.invokeLater(() -> modeloTabla.setRowCount(0));
-
-	                    for (int i = 1; i <= sheet.getLastRowNum(); i++) {
-	                        Row row = sheet.getRow(i);
-	                        if (row != null) {
-	                            Object[] fila = new Object[7]; // Ajusta según tus columnas
-
-	                            for (int j = 0; j < fila.length; j++) {
-	                                Cell cell = row.getCell(j, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK);
-
-	                                // Manejo especial para columna de imagen (índice 5)
-	                                if (j == 5) {
-	                                    fila[j] = cell.getStringCellValue().trim(); // Guardar solo el nombre del archivo
-	                                }
-	                                // Manejo para ID (columna 0)
-	                                else if (j == 0) {
-	                                    fila[j] = (int) cell.getNumericCellValue();
-	                                }
-	                                // Manejo para Precio (columna 3)
-	                                else if (j == 3) {
-	                                    fila[j] = cell.getNumericCellValue();
-	                                }
-	                                // Para el resto de columnas
-	                                else {
-	                                    fila[j] = cell.getStringCellValue().trim();
-	                                }
-	                            }
-
-
-
-	                            final Object[] filaFinal = fila;
-	                            SwingUtilities.invokeLater(() -> modeloTabla.addRow(filaFinal));
+	            protected Void doInBackground() {
+	                try {
+	                    List<Producto> productos = ExcelControlador.leerProductosDesdeExcel();
+	                    SwingUtilities.invokeLater(() -> {
+	                        modeloTabla.setRowCount(0);
+	                        for (Producto p : productos) {
+	                            modeloTabla.addRow(new Object[]{
+	                                p.getId(),
+	                                p.getNombre(),
+	                                p.getMarca(),
+	                                p.getPrecio(),
+	                                p.getDescripcion(),
+	                                p.getImagenPath(),
+	                                p.getCategoria()
+	                            });
 	                        }
-
-
-	                    }
+	                    });
+	                } catch (Exception e) {
+	                    SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(
+	                        null,
+	                        "Error al cargar productos desde MySQL: " + e.getMessage(),
+	                        "Error",
+	                        JOptionPane.ERROR_MESSAGE));
 	                }
 	                return null;
-	            }
-
-	            @Override
-	            protected void done() {
-	                try {
-	                    get(); // Para capturar excepciones
-
-	                } catch (Exception e) {
-	                    JOptionPane.showMessageDialog(null,
-	                        "Error al cargar: " + e.getMessage(),
-	                        "Error",
-	                        JOptionPane.ERROR_MESSAGE);
-	                }
 	            }
 	        }.execute();
 	    }
@@ -172,222 +99,89 @@ public class ProductoControlador {
 	    }
 
 	public static void actualizarCeldaEnExcel(int fila, int columna, Object valor, String rutaArchivo) {
-	    try (FileInputStream fis = new FileInputStream(rutaArchivo);
-	         Workbook workbook = new XSSFWorkbook(fis);
-	         FileOutputStream fos = new FileOutputStream(rutaArchivo)) {
+	    if (ultimoModelo == null || fila >= ultimoModelo.getRowCount()) {
+	    	return;
+	    }
+	    Object idObj = ultimoModelo.getValueAt(fila, 0);
+	    if (idObj == null) {
+	    	return;
+	    }
+	    int idProducto = Integer.parseInt(idObj.toString());
+	    String columnaDB = null;
+	    switch (columna) {
+	        case 1:
+	            columnaDB = "nombre";
+	            break;
+	        case 2:
+	            columnaDB = "marca";
+	            break;
+	        case 3:
+	            columnaDB = "precio";
+	            break;
+	        case 4:
+	            columnaDB = "descripcion";
+	            break;
+	        case 5:
+	            columnaDB = "imagen";
+	            break;
+	        case 6:
+	            columnaDB = "categoria";
+	            break;
+	        default:
+	            break;
+	    }
+	    if (columnaDB == null) {
+	    	return;
+	    }
 
-	        Sheet sheet = workbook.getSheetAt(0);
-	        Row row = sheet.getRow(fila + 1); // +1 para saltar la cabecera
-
-	        if (row == null) {
-	            row = sheet.createRow(fila + 1);
-	        }
-
-	        Cell cell = row.getCell(columna);
-	        if (cell == null) {
-	            cell = row.createCell(columna);
-	        }
-
-	        // Manejar diferentes tipos de datos
-	        if (valor instanceof Integer) {
-	            cell.setCellValue((Integer) valor);
-	        } else if (valor instanceof Double) {
-	            cell.setCellValue((Double) valor);
-	        } else {
-	            cell.setCellValue(valor.toString());
-	        }
-
-	        workbook.write(fos);
+	    try {
+	        MySQLControlador.actualizarCampoProducto(idProducto, columnaDB, valor);
 	    } catch (Exception e) {
-	        e.printStackTrace();
-	        JOptionPane.showMessageDialog(null, "Error al actualizar Excel: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+	        JOptionPane.showMessageDialog(null,
+	                "Error al actualizar el producto en MySQL: " + e.getMessage(),
+	                "Error", JOptionPane.ERROR_MESSAGE);
 	    }
 	}
 
 
 
 	public static void guardarCambiosExcel(DefaultTableModel modeloTabla, String rutaArchivo) {
-	    // 1. Crear backup con timestamp
-	    String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
-	    File backupDir = new File("data/backups");
-	    if (!backupDir.exists()) {
-	        backupDir.mkdirs();
-	    }
-
+	    ultimoModelo = modeloTabla;
 	    try {
-	        Files.copy(Paths.get(rutaArchivo), Paths.get("data/backups/productos_" + timestamp + ".xlsx"));
-	    } catch (IOException e) {
-	        System.err.println("Error al crear backup: " + e.getMessage());
-	    }
+	        for (int i = 0; i < modeloTabla.getRowCount(); i++) {
+	            int id = Integer.parseInt(String.valueOf(modeloTabla.getValueAt(i, 0)));
+	            String nombre = safeString(modeloTabla.getValueAt(i, 1));
+	            String marca = safeString(modeloTabla.getValueAt(i, 2));
+	            double precio = modeloTabla.getValueAt(i, 3) instanceof Number
+	                    ? ((Number) modeloTabla.getValueAt(i, 3)).doubleValue() : 0d;
+	            String descripcion = safeString(modeloTabla.getValueAt(i, 4));
+	            String imagen = safeString(modeloTabla.getValueAt(i, 5));
+	            String categoria = safeString(modeloTabla.getValueAt(i, 6));
 
-	    // 2. Verificar estructura de directorios
-	    File directorio = new File("data");
-	    if (!directorio.exists() && !directorio.mkdirs()) {
+	            Producto producto = new Producto(
+	                    id,
+	                    nombre,
+	                    marca,
+	                    precio,
+	                    descripcion,
+	                    imagen,
+	                    0,
+	                    0,
+	                    "",
+	                    0,
+	                    categoria
+	            );
+	            MySQLControlador.upsertProducto(producto);
+	        }
 	        JOptionPane.showMessageDialog(null,
-	            "No se pudo crear el directorio 'data'",
-	            "Error",
-	            JOptionPane.ERROR_MESSAGE);
-	        return;
-	    }
-
-	    // 3. Preparar archivos temporales
-	    File archivoOriginal = new File(rutaArchivo);
-	    File tempFile = new File(rutaArchivo + ".tmp");
-	    File backupFile = new File(rutaArchivo + ".backup_" + timestamp);
-
-	    detenerObservadorExcel();
-
-	    try {
-	        // 4. Crear respaldo adicional
-	        if (archivoOriginal.exists()) {
-	            Files.copy(archivoOriginal.toPath(), backupFile.toPath());
-	        }
-
-	        // 5. Escribir en archivo temporal
-	        try (Workbook workbook = new XSSFWorkbook();
-	             FileOutputStream fos = new FileOutputStream(tempFile)) {
-
-	            Sheet sheet = workbook.createSheet("Productos");
-
-	            // Estilos
-	            CellStyle integerStyle = workbook.createCellStyle();
-	            integerStyle.setDataFormat(workbook.createDataFormat().getFormat("0"));
-
-	            CellStyle headerStyle = workbook.createCellStyle();
-	            Font headerFont = workbook.createFont();
-	            headerFont.setBold(true);
-	            headerStyle.setFont(headerFont);
-
-	            // Escribir cabeceras
-	            Row headerRow = sheet.createRow(0);
-	            String[] headers = {"ID", "Nombre", "Marca", "Precio", "Descripción", "Imagen",
-	                              "Categoría", "Stock", "Stock_Minimo", "Proveedor", "Ventas"};
-
-	            for (int i = 0; i < headers.length; i++) {
-	                Cell cell = headerRow.createCell(i);
-	                cell.setCellValue(headers[i]);
-	                cell.setCellStyle(headerStyle);
-
-
-	            }
-
-	            // 6. Leer archivo original si existe para preservar datos
-	            Workbook originalWorkbook = null;
-	            Sheet originalSheet = null;
-	            boolean archivoExiste = archivoOriginal.exists();
-
-	            if (archivoExiste) {
-	                try {
-	                    originalWorkbook = WorkbookFactory.create(archivoOriginal);
-	                    originalSheet = originalWorkbook.getSheetAt(0);
-	                } catch (Exception e) {
-	                    System.err.println("Advertencia: No se pudo leer archivo original: " + e.getMessage());
-	                }
-	            }
-
-	            // 7. Escribir datos
-	            for (int i = 0; i < modeloTabla.getRowCount(); i++) {
-	                Row row = sheet.createRow(i + 1);
-
-
-
-	                // Escribir columnas visibles (0-6) desde el modelo
-	                for (int j = 0; j < 7; j++) {
-	                    Object value = modeloTabla.getValueAt(i, j);
-	                    Cell cell = row.createCell(j);
-
-	                    if (j == 0) { // Columna ID
-	                        cell.setCellStyle(integerStyle);
-	                        if (value != null) {
-	                            try {
-	                                int idValue = (value instanceof Number) ?
-	                                    ((Number)value).intValue() : Integer.parseInt(value.toString());
-	                                cell.setCellValue(idValue);
-	                            } catch (Exception e) {
-	                                cell.setCellValue(0);
-	                            }
-	                        } else {
-	                            cell.setCellValue(0);
-	                        }
-	                    } else {
-	                        setCellValueSafely(cell, value);
-	                    }
-	                }
-
-	                // Manejar columnas ocultas (7-10): Stock, Stock_Minimo, Proveedor, Ventas
-	                if (archivoExiste && originalSheet != null && originalSheet.getLastRowNum() >= i + 1) {
-	                    // Para filas existentes, copiar valores originales
-	                    Row originalRow = originalSheet.getRow(i + 1);
-	                    if (originalRow != null) {
-	                        for (int k = 7; k <= 10; k++) {
-	                            Cell originalCell = originalRow.getCell(k);
-	                            if (originalCell != null) {
-	                                Cell newCell = row.createCell(k);
-	                                copyCellValue(originalCell, newCell);
-	                            }
-	                        }
-	                    }
-	                } else {
-	                    // Para nuevas filas, establecer valores por defecto
-	                    row.createCell(7).setCellValue(0); // Stock inicial
-	                    row.createCell(8).setCellValue(5); // Stock_Minimo (valor por defecto)
-
-	                    // Obtener proveedor del modelo si está disponible (columna 9)
-	                    if (modeloTabla.getColumnCount() > 9 && modeloTabla.getValueAt(i, 9) != null) {
-	                        row.createCell(9).setCellValue(modeloTabla.getValueAt(i, 9).toString());
-	                    } else {
-	                        row.createCell(9).setCellValue(""); // Proveedor vacío por defecto
-	                    }
-
-	                    row.createCell(10).setCellValue(0); // Ventas iniciales
-	                }
-	            }
-
-	            // Cerrar workbook original si estaba abierto
-	            if (originalWorkbook != null) {
-	                originalWorkbook.close();
-	            }
-
-	            // Autoajustar columnas
-	            for (int i = 0; i < headers.length; i++) {
-	                sheet.autoSizeColumn(i);
-	            }
-
-	            workbook.write(fos);
-	        }
-
-	        // 8. Reemplazar archivo original
-	        if (archivoOriginal.exists()) {
-	            Files.delete(archivoOriginal.toPath());
-	        }
-	        Files.move(tempFile.toPath(), archivoOriginal.toPath(), StandardCopyOption.REPLACE_EXISTING);
-
-	        JOptionPane.showMessageDialog(null,
-	            "Datos guardados con éxito!\nRespaldo: productos_" + timestamp + ".xlsx",
-	            "Éxito",
-	            JOptionPane.INFORMATION_MESSAGE);
-
+	                "Productos guardados en MySQL correctamente.",
+	                "Éxito",
+	                JOptionPane.INFORMATION_MESSAGE);
 	    } catch (Exception e) {
-	        // 9. Restaurar desde respaldo si hubo error
-	        try {
-	            if (backupFile.exists()) {
-	                Files.move(backupFile.toPath(), new File(rutaArchivo).toPath(),
-	                         StandardCopyOption.REPLACE_EXISTING);
-	            }
-	        } catch (IOException ex) {
-	            System.err.println("Error al restaurar backup: " + ex.getMessage());
-	        }
-
 	        JOptionPane.showMessageDialog(null,
-	            "Error al guardar. Se restauró la versión anterior.\nDetalle: " + e.getMessage(),
-	            "Error",
-	            JOptionPane.ERROR_MESSAGE);
-	    } finally {
-	        // 10. Limpieza y reinicio
-	        if (tempFile.exists()) {
-	            tempFile.delete();
-	        }
-	        iniciarObservadorExcel(modeloTabla);
+	                "Error al guardar en MySQL: " + e.getMessage(),
+	                "Error",
+	                JOptionPane.ERROR_MESSAGE);
 	    }
 	}
 
@@ -459,83 +253,40 @@ public class ProductoControlador {
 
 	// En controlador/ProductoController.java
 	public static void actualizarStockEnExcel(int idProducto, int cantidadModificada, String motivo) {
-	    // Validar parámetros
 	    if (motivo == null || motivo.trim().isEmpty()) {
 	        throw new IllegalArgumentException("El motivo no puede estar vacío");
 	    }
-
 	    try {
-	        // 1. Abrir archivo Excel
-	        File excelFile = new File("data/productos.xlsx");
-	        if (!excelFile.exists()) {
-	            throw new FileNotFoundException("Archivo de productos no encontrado");
-	        }
-
-	        try (FileInputStream fis = new FileInputStream(excelFile);
-	             Workbook workbook = WorkbookFactory.create(fis)) {
-
-	            Sheet sheet = workbook.getSheetAt(0);
-	            boolean productoEncontrado = false;
-
-	            // 2. Buscar producto por ID
-	            for (Row row : sheet) {
-	                if (row.getRowNum() == 0)
-					 {
-						continue; // Saltar cabecera
-					}
-
-	                if ((int) row.getCell(0).getNumericCellValue() == idProducto) {
-	                    productoEncontrado = true;
-	                    int stockActual = (int) row.getCell(7).getNumericCellValue(); // Columna Stock
-
-	                    // 3. Actualizar stock (forma más robusta)
-	                    int nuevoStock = stockActual + cantidadModificada; // cantidadModificada puede ser + o -
-
-	                    // Validar que el stock no sea negativo
-	                    if (nuevoStock < 0) {
-	                        throw new IllegalStateException(
-	                            String.format("Stock no puede ser negativo (Producto ID: %d, Stock actual: %d, Cambio: %d)",
-	                                idProducto, stockActual, cantidadModificada));
-	                    }
-
-	                    row.getCell(7).setCellValue(nuevoStock);
-
-	                    // 4. Registrar movimiento (opcional)
-	                    Cell motivoCell = row.getCell(8); // Asumiendo columna 8 para motivo
-	                    if (motivoCell == null) {
-							motivoCell = row.createCell(8);
-						}
-	                    motivoCell.setCellValue(motivo + " - " + LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE));
-
-	                    break;
-	                }
-	            }
-
-	            if (!productoEncontrado) {
-	                throw new IllegalArgumentException("Producto con ID " + idProducto + " no encontrado");
-	            }
-
-	            // 5. Guardar cambios
-	            try (FileOutputStream fos = new FileOutputStream(excelFile)) {
-	                workbook.write(fos);
-	            }
-	        }
-	    } catch (FileNotFoundException e) {
-	        JOptionPane.showMessageDialog(null,
-	            "Archivo de productos no encontrado en: data/productos.xlsx",
-	            "Error", JOptionPane.ERROR_MESSAGE);
-	        throw new RuntimeException("Archivo no encontrado", e);
-	    } catch (IllegalStateException | IllegalArgumentException e) {
-	        JOptionPane.showMessageDialog(null,
-	            e.getMessage(),
-	            "Error de validación", JOptionPane.ERROR_MESSAGE);
-	        throw e; // Relanzar para manejo superior
+	        String nombre = buscarNombreProducto(idProducto);
+	        MySQLControlador.registrarMovimientoInventario(idProducto, nombre, cantidadModificada, motivo);
 	    } catch (Exception e) {
-	        JOptionPane.showMessageDialog(null,
-	            "Error técnico al actualizar stock: " + e.getMessage(),
-	            "Error", JOptionPane.ERROR_MESSAGE);
-	        throw new RuntimeException("Error al actualizar stock", e);
+	        throw new RuntimeException("Error al actualizar stock en MySQL", e);
 	    }
+	}
+
+	private static String buscarNombreProducto(int idProducto) {
+	    if (ultimoModelo != null) {
+	        for (int i = 0; i < ultimoModelo.getRowCount(); i++) {
+	            Object idObj = ultimoModelo.getValueAt(i, 0);
+	            if (idObj != null && Integer.parseInt(idObj.toString()) == idProducto) {
+	                Object nombreObj = ultimoModelo.getValueAt(i, 1);
+	                return nombreObj != null ? nombreObj.toString() : "";
+	            }
+	        }
+	    }
+	    try {
+	        return ExcelControlador.leerProductosDesdeExcel().stream()
+	                .filter(p -> p.getId() == idProducto)
+	                .map(Producto::getNombre)
+	                .findFirst()
+	                .orElse("");
+	    } catch (Exception e) {
+	        return "";
+	    }
+	}
+
+	private static String safeString(Object valor) {
+	    return valor == null ? "" : valor.toString();
 	}
 
 	// En ProductoController.java
@@ -560,7 +311,6 @@ public class ProductoControlador {
 	public static synchronized boolean registrarMovimientoEnExcel(int idProducto, String nombreProducto,
 	        String tipo, int cantidad, String motivo, int stockActual) {
 
-	    // 1. Validaciones iniciales
 	    if (motivo == null || motivo.trim().isEmpty()) {
 	        throw new IllegalArgumentException("El motivo no puede estar vacío");
 	    }
@@ -568,100 +318,12 @@ public class ProductoControlador {
 	        throw new IllegalArgumentException("La cantidad debe ser positiva");
 	    }
 
-	    // 2. Configuración de rutas
-	    Path productosPath = Paths.get("data/productos.xlsx");
-	    Path movimientosPath = Paths.get("data/movimientos.xlsx");
-	    Path tempMovimientosPath = Paths.get("data/movimientos_temp_" + System.nanoTime() + ".xlsx");
-	    Path backupMovimientosPath = Paths.get("data/backups/movimientos_backup_" +
-	        new SimpleDateFormat("yyyyMMdd_HHmmssSSS").format(new Date()) + ".xlsx");
-
-	    // 3. Detener observador de archivos
-	    ExcelLector.detenerObservador();
-	    boolean exito = false;
-	    Workbook movimientosWB = null;
-
+	    int delta = "ENTRADA".equalsIgnoreCase(tipo) ? cantidad : -cantidad;
 	    try {
-	        // 4. Crear backup del archivo de movimientos
-	        if (Files.exists(movimientosPath)) {
-	            Files.copy(movimientosPath, backupMovimientosPath, StandardCopyOption.REPLACE_EXISTING);
-	        }
-
-	        // 5. Cargar o crear workbook de movimientos
-	        if (!Files.exists(movimientosPath) || Files.size(movimientosPath) == 0) {
-	            movimientosWB = new XSSFWorkbook();
-	        } else {
-	            try (InputStream is = Files.newInputStream(movimientosPath)) {
-	                movimientosWB = WorkbookFactory.create(is);
-	            } catch (Exception e) {
-	                System.err.println("Archivo corrupto, creando nuevo...");
-	                movimientosWB = new XSSFWorkbook();
-	            }
-	        }
-
-	        // 6. Configurar hoja de movimientos
-	        Sheet movimientosSheet = movimientosWB.getSheet("Movimientos");
-	        if (movimientosSheet == null) {
-	            movimientosSheet = movimientosWB.createSheet("Movimientos");
-	            String[] headers = {"Fecha", "ID Producto", "Producto", "Tipo",
-	                              "Cantidad", "Stock Resultante", "Motivo"};
-	            Row headerRow = movimientosSheet.createRow(0);
-	            for (int i = 0; i < headers.length; i++) {
-	                headerRow.createCell(i).setCellValue(headers[i]);
-	            }
-	        }
-
-	        // 7. Registrar movimiento
-	        Row newRow = movimientosSheet.createRow(movimientosSheet.getLastRowNum() + 1);
-	        int nuevoStock = tipo.equals("ENTRADA") ? stockActual + cantidad : stockActual - cantidad;
-
-	        newRow.createCell(0).setCellValue(new Date().toString());
-	        newRow.createCell(1).setCellValue(idProducto);
-	        newRow.createCell(2).setCellValue(nombreProducto);
-	        newRow.createCell(3).setCellValue(tipo);
-	        newRow.createCell(4).setCellValue(cantidad);
-	        newRow.createCell(5).setCellValue(nuevoStock);
-	        newRow.createCell(6).setCellValue(motivo);
-
-	        // 8. Guardar en archivo temporal
-	        try (OutputStream os = Files.newOutputStream(tempMovimientosPath)) {
-	            movimientosWB.write(os);
-	        }
-
-	        // 9. Reemplazo atómico del archivo
-	        exito = reemplazarArchivoAtomico(tempMovimientosPath, movimientosPath);
-
-	        // 10. Actualizar stock en productos.xlsx
-	        if (exito) {
-	            exito = actualizarStockProducto(idProducto, tipo.equals("ENTRADA") ? cantidad : -cantidad);
-	        }
-
+	        return MySQLControlador.registrarMovimientoInventario(idProducto, nombreProducto, delta, motivo);
 	    } catch (Exception e) {
-	        System.err.println("Error al registrar movimiento: " + e.getMessage());
-	        e.printStackTrace();
-	        // Restaurar backup si es necesario
-	        if (Files.exists(backupMovimientosPath)) {
-	            try {
-	                Files.copy(backupMovimientosPath, movimientosPath, StandardCopyOption.REPLACE_EXISTING);
-	            } catch (IOException ex) {
-	                System.err.println("Error al restaurar backup: " + ex.getMessage());
-	            }
-	        }
-	    } finally {
-	        try {
-	            if (movimientosWB != null) {
-					movimientosWB.close();
-				}
-	            Files.deleteIfExists(tempMovimientosPath);
-	        } catch (IOException e) {
-	            System.err.println("Error al limpiar recursos: " + e.getMessage());
-	        }
-	        ExcelLector.reiniciarObservador();
+	        throw new IllegalStateException("No se pudo registrar el movimiento en MySQL", e);
 	    }
-
-	    if (!exito) {
-	        throw new IllegalStateException("No se pudo registrar el movimiento");
-	    }
-	    return exito;
 	}
 
 	// Métodos auxiliares

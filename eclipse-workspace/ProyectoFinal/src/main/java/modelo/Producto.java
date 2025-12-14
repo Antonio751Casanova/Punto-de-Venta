@@ -11,11 +11,12 @@ public class Producto {
     private int stockMinimo;  // Nuevo: Nivel mínimo para alertas
     private String proveedor; // Nuevo: Proveedor principal
     private int ventas;
+    private String categoria;
 
 
     // Constructor, getters y setters
     public Producto(int id, String nombre, String marca, double precio, String descripcion, String imagenPath, int stock,
-            int stockMinimo, String proveedor, int ventas) {
+            int stockMinimo, String proveedor, int ventas, String categoria) {
         this.id = id;
         this.nombre = nombre;
         this.marca = marca;
@@ -26,6 +27,7 @@ public class Producto {
         this.stockMinimo = stockMinimo;
         this.proveedor = proveedor;
         this.ventas=ventas;
+        this.categoria = categoria;
     }
 
 
@@ -128,9 +130,17 @@ public class Producto {
 		return imagenPath;
 	}
 
-	public void setImagenPath(String imagenPath) {
-		this.imagenPath = imagenPath;
-	}
+    public void setImagenPath(String imagenPath) {
+        this.imagenPath = imagenPath;
+    }
+
+    public String getCategoria() {
+        return categoria;
+    }
+
+    public void setCategoria(String categoria) {
+        this.categoria = categoria;
+    }
 
 
 }

@@ -56,8 +56,9 @@ import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
-import controlador.ExcelLector;
+import controlador.ExcelControlador;
 import controlador.ProductoControlador;
+import modelo.Producto;
 
 public class ProductosVista extends JFrame {
     private JTable tablaProductos;
@@ -74,39 +75,6 @@ public class ProductosVista extends JFrame {
         setSize(1000, 650);
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
         setLayout(new BorderLayout());
-
-        ProductoControlador.verificarEstructuraExcel("data/productos.xlsx");
-
-
-        // 1. Verificar y crear estructura de archivos
-        File dataDir = new File("data");
-        if (!dataDir.exists()) {
-            dataDir.mkdirs();
-        }
-
-        File excelFile = new File("data/productos.xlsx");
-        if (!excelFile.exists()) {
-            try (Workbook workbook = new XSSFWorkbook();
-                 FileOutputStream fos = new FileOutputStream(excelFile)) {
-
-                workbook.createSheet("Productos");
-
-                // Crear cabeceras básicas
-                Sheet sheet = workbook.getSheetAt(0);
-                Row headerRow = sheet.createRow(0);
-                String[] headers = {"ID", "Nombre", "Marca", "Precio", "Descripción", "Imagen", "Categoría"};
-                for (int i = 0; i < headers.length; i++) {
-                    headerRow.createCell(i).setCellValue(headers[i]);
-                }
-
-                workbook.write(fos);
-            } catch (Exception e) {
-                JOptionPane.showMessageDialog(this,
-                    "Error al crear archivo Excel: " + e.getMessage(),
-                    "Error",
-                    JOptionPane.ERROR_MESSAGE);
-            }
-        }
 
         // 2. Crear modelo de tabla VACÍO (cambio clave)
         modeloTabla = new DefaultTableModel(
@@ -156,11 +124,7 @@ public class ProductosVista extends JFrame {
         add(new JScrollPane(tablaProductos), BorderLayout.CENTER);
         add(configurarPanelBotones(), BorderLayout.SOUTH);
 
-        // 4. Configurar observador de archivo (en segundo plano)
-        ProductoControlador.iniciarObservadorExcel(modeloTabla);
-        new Thread(new ExcelLector(modeloTabla, "data/productos.xlsx")).start();
-
-        // 5. Configurar redimensionamiento
+        // 4. Configurar redimensionamiento
         addComponentListener(new ComponentAdapter() {
             @Override
             public void componentResized(ComponentEvent e) {
@@ -168,16 +132,10 @@ public class ProductosVista extends JFrame {
             }
         });
 
-        // 6. Configurar menú de opciones
+        // 5. Configurar menú de opciones
         configurarMenuOpciones();
 
-        // 7. Mostrar advertencia
-        JOptionPane.showMessageDialog(this,
-            "No modifique el Excel manualmente mientras la aplicación esté abierta",
-            "Advertencia Importante",
-            JOptionPane.WARNING_MESSAGE);
-
-        // 8. Mostrar ventana
+        // 6. Mostrar ventana
         setVisible(true);
         revalidate();
 
@@ -767,33 +725,20 @@ public class ProductosVista extends JFrame {
     private JPanel configurarPanelBotones() {
         JPanel panelBotones = new JPanel();
 
-        JButton btnCargarExcel = new JButton("Cargar Excel");
-        btnCargarExcel.addActionListener(e -> {
-            // Limpiar tabla antes de cargar
-            modeloTabla.setRowCount(0);
-
-            // Mostrar diálogo de carga
-            JOptionPane.showMessageDialog(this,
-                "Cargando datos desde Excel...",
-                "Cargando",
-                JOptionPane.INFORMATION_MESSAGE);
-
-            // Cargar datos
-            ProductoControlador.cargarDatosExcel(modeloTabla);
-        });
-
+        JButton btnCargarExcel = new JButton("Sincronizar MySQL");
         btnCargarExcel.addActionListener(e -> {
             new SwingWorker<Void, Void>() {
                 @Override
                 protected Void doInBackground() throws Exception {
-                	ProductoControlador.cargarDatosExcel(modeloTabla);
+                    modeloTabla.setRowCount(0);
+                    ProductoControlador.cargarDatosExcel(modeloTabla);
                     return null;
                 }
 
                 @Override
                 protected void done() {
                     JOptionPane.showMessageDialog(ProductosVista.this,
-                        "Datos cargados correctamente",
+                        "Datos sincronizados con la base MySQL.",
                         "Éxito",
                         JOptionPane.INFORMATION_MESSAGE);
                 }
@@ -805,21 +750,15 @@ public class ProductosVista extends JFrame {
         JButton btnGuardar = new JButton("Guardar Cambios");
         JButton btnEliminar = new JButton("Eliminar");
 
-     // Nuevo botón de recarga
-        JButton btnRecargar = new JButton("Forzar Recarga");
-        btnRecargar.addActionListener(e -> {
-        	ProductoControlador.cargarDatosExcel(modeloTabla);
-        });
+         btnNuevo.addActionListener(e -> agregarNuevoProducto());
+         btnGuardar.addActionListener(e -> ProductoControlador.guardarCambiosExcel(modeloTabla, "mysql"));
+         btnEliminar.addActionListener(e -> eliminarProducto());
 
-        btnNuevo.addActionListener(e -> agregarNuevoProducto());
-        btnCargarExcel.addActionListener(e -> ProductoControlador.cargarDatosExcel(modeloTabla));
-        btnGuardar.addActionListener(e -> ProductoControlador.guardarCambiosExcel(modeloTabla, "data/productos.xlsx"));
-        btnEliminar.addActionListener(e -> eliminarProducto());
+         panelBotones.add(btnCargarExcel);
+         panelBotones.add(btnNuevo);
 
-        panelBotones.add(btnNuevo);
-
-        panelBotones.add(btnGuardar);
-        panelBotones.add(btnEliminar);
+         panelBotones.add(btnGuardar);
+         panelBotones.add(btnEliminar);
 
         add(panelBotones, BorderLayout.SOUTH);
 
@@ -829,15 +768,6 @@ public class ProductosVista extends JFrame {
 
 
     private void agregarNuevoProducto() {
-        // Verificar existencia del archivo primero
-        if (!new File("data/productos.xlsx").exists()) {
-            JOptionPane.showMessageDialog(this,
-                "El archivo de productos no existe. Cree uno primero.",
-                "Error",
-                JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-
         JDialog dialog = new JDialog(this, "Nuevo Producto", true);
         dialog.setLayout(new GridLayout(0, 2, 5, 5));
 
@@ -918,28 +848,11 @@ public class ProductosVista extends JFrame {
 
     // Método para obtener el siguiente ID numérico
     private int obtenerSiguienteID() {
-        try (Workbook workbook = WorkbookFactory.create(new File("data/productos.xlsx"))) {
-            Sheet sheet = workbook.getSheetAt(0);
-            int lastRow = sheet.getLastRowNum();
-            int maxId = 0;
-
-            for (int i = 1; i <= lastRow; i++) {
-                Row row = sheet.getRow(i);
-                if (row != null) {
-                    Cell idCell = row.getCell(0); // Columna ID
-                    if (idCell != null) {
-                        try {
-                            int currentId = (int)idCell.getNumericCellValue();
-                            if (currentId > maxId) {
-                                maxId = currentId;
-                            }
-                        } catch (Exception e) {
-                            // Si hay error al leer como número, ignorar esta fila
-                        }
-                    }
-                }
-            }
-            return maxId + 1;
+        try {
+            return ExcelControlador.leerProductosDesdeExcel().stream()
+                    .mapToInt(Producto::getId)
+                    .max()
+                    .orElse(0) + 1;
         } catch (Exception e) {
             return 1; // Si hay error, empezar desde 1
         }
